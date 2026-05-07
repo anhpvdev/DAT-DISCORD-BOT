@@ -1,0 +1,7 @@
+services:
+  dailybot:
+    build: .
+    container_name: dailybot
+    restart: always
+    env_file:
+      - .env
