@@ -300,6 +300,12 @@ async function runSchedulerTickSafely() {
 
 async function runSchedulerTick() {
   const vietnamTime = getVietnamTimeParts();
+
+  if (!isVietnamBusinessDay(vietnamTime.date)) {
+    pruneScheduleKeys(vietnamTime.date);
+    return;
+  }
+
   const dueReports = config.reports.filter((report) => report.time === vietnamTime.time);
 
   if (!dueReports.length) {
@@ -364,6 +370,13 @@ function isReportWindowOpen(reportDate, reportTime, date = new Date()) {
   const { startAt, endAt } = getReportWindow(reportDate, reportTime);
 
   return date >= startAt && date <= endAt;
+}
+
+function isVietnamBusinessDay(reportDate) {
+  const [year, month, day] = reportDate.split('-').map(Number);
+  const dayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+
+  return dayOfWeek >= 1 && dayOfWeek <= 5;
 }
 
 function buildExpiredReportMessage(report, reportDate, reportTime) {
