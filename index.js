@@ -172,7 +172,7 @@ client.on(Events.MessageCreate, async (message) => {
     console.error('Failed to handle resend command:', error);
 
     if (!message.author.bot && message.inGuild()) {
-      await message.reply('Khong the gui lai phieu report luc nay. Vui long thu lai sau.');
+      await message.reply('Không thể xử lý report lúc này. Vui lòng thử lại sau.');
     }
   }
 });
@@ -484,7 +484,7 @@ async function handleResendCommand(message) {
   const report = getReportByResendKeyword(keyword);
 
   if (!report) {
-    await message.reply('Dung `/resend sang` hoac `/resend chieu`.');
+    await message.reply('Dùng `/resend sang` hoặc `/resend chieu`.');
     return;
   }
 
@@ -492,7 +492,7 @@ async function handleResendCommand(message) {
   const member = message.member || (await message.guild.members.fetch(message.author.id));
 
   await sendPromptToMember(report, member, reportDate, report.time);
-  await message.reply(`Da gui lai phieu ${report.displayName} vao DM cua ban.`);
+  await message.reply(`Đã gửi lại phiếu ${report.displayName} vào DM của bạn.`);
 }
 
 async function deleteExistingPromptMessages(dmChannel, reportType) {
