@@ -22,6 +22,7 @@ const MODAL_CUSTOM_ID_PREFIX = 'daily_report_submit';
 const DEFAULT_REPORT_START_TIME = '08:00';
 const DEFAULT_REPORT_END_TIME = '17:00';
 const PROMPT_CLEANUP_PAGE_SIZE = 100;
+const RESEND_COMMAND_PREFIX = '/resend';
 
 const REPORT_DEFINITIONS = [
   {
@@ -119,6 +120,8 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages,
   ],
   partials: [Partials.Channel],
@@ -158,6 +161,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         content: 'Không thể xử lý report lúc này. Vui lòng thử lại sau.',
         flags: interaction.inGuild() ? MessageFlags.Ephemeral : undefined,
       });
+    }
+  }
+});
+
+client.on(Events.MessageCreate, async (message) => {
+  try {
+    await handleResendCommand(message);
+  } catch (error) {
+    console.error('Failed to handle resend command:', error);
+
+    if (!message.author.bot && message.inGuild()) {
+      await message.reply('Khong the gui lai phieu report luc nay. Vui long thu lai sau.');
     }
   }
 });
@@ -225,6 +240,28 @@ function isReportTime(value) {
 
 function getReportDefinition(reportType) {
   return REPORT_DEFINITIONS_BY_TYPE.get(reportType) || null;
+}
+
+function normalizeVietnameseText(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function getReportByResendKeyword(keyword) {
+  const normalized = normalizeVietnameseText(keyword);
+
+  if (normalized === 'sang') {
+    return config.reports.find((report) => report.type === 'start') || null;
+  }
+
+  if (normalized === 'chieu') {
+    return config.reports.find((report) => report.type === 'end') || null;
+  }
+
+  return null;
 }
 
 function startScheduler() {
@@ -382,6 +419,20 @@ async function sendDailyReportPromptsForGuild(report, guildId, reportDate, repor
   };
 }
 
+async function sendPromptToMember(report, member, reportDate, reportTime) {
+  const button = new ButtonBuilder()
+    .setCustomId(buildPromptCustomId(report.type, member.guild.id, reportDate, reportTime))
+    .setLabel(report.buttonLabel)
+    .setStyle(ButtonStyle.Primary);
+
+  const components = [new ActionRowBuilder().addComponents(button)];
+  const content = buildPromptContent(report, reportDate);
+  const dmChannel = await member.createDM();
+
+  await deleteExistingPromptMessages(dmChannel, report.type);
+  await dmChannel.send({ content, components });
+}
+
 async function fetchTargetRoles(guild) {
   const roles = [];
   const missingRoleIds = [];
@@ -410,6 +461,38 @@ function buildPromptContent(report, reportDate) {
     `[DAT-Daily Report] ${report.displayName} ngày ${formatVietnamDate(reportDate)}`,
     'Bấm nút dưới đây để điền report.',
   ].join('\n');
+}
+
+async function handleResendCommand(message) {
+  if (message.author.bot || !message.inGuild()) {
+    return;
+  }
+
+  const mentionPatterns = [
+    `<@${client.user.id}>`,
+    `<@!${client.user.id}>`,
+  ];
+  const command = mentionPatterns
+    .reduce((content, pattern) => content.replace(pattern, ' '), message.content)
+    .trim();
+
+  if (!command.toLowerCase().startsWith(RESEND_COMMAND_PREFIX)) {
+    return;
+  }
+
+  const keyword = command.slice(RESEND_COMMAND_PREFIX.length).trim();
+  const report = getReportByResendKeyword(keyword);
+
+  if (!report) {
+    await message.reply('Dung `/resend sang` hoac `/resend chieu`.');
+    return;
+  }
+
+  const reportDate = getVietnamTimeParts().date;
+  const member = message.member || (await message.guild.members.fetch(message.author.id));
+
+  await sendPromptToMember(report, member, reportDate, report.time);
+  await message.reply(`Da gui lai phieu ${report.displayName} vao DM cua ban.`);
 }
 
 async function deleteExistingPromptMessages(dmChannel, reportType) {
