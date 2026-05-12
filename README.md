@@ -4,7 +4,6 @@ Bot gửi form daily report qua DM cho tất cả member có role được cấu
 
 - `REPORT_START_TIME`, mặc định `08:00`: report đầu ngày.
 - `REPORT_END_TIME`, mặc định `17:00`: report cuối ngày.
-- `REPORT_DURATION`, mặc định `60` phút: thời gian member được phép gửi report kể từ mốc giờ report.
 
 Khi user điền form, report sẽ được gửi về channel admin.
 
@@ -20,14 +19,13 @@ TARGET_ROLE_IDS=role_id_to_collect_daily_report_from,another_role_id_here
 REPORT_CHANNEL_ID=channel_id_for_admin_reports
 REPORT_START_TIME=08:00
 REPORT_END_TIME=17:00
-REPORT_DURATION=60
 ```
 
 `GUILD_IDS` và `TARGET_ROLE_IDS` dùng format comma-separated. Bot vẫn đọc được biến cũ `GUILD_ID` và `TARGET_ROLE_ID`, nhưng nên đổi sang biến số nhiều để rõ nghĩa.
 
 `REPORT_START_TIME` và `REPORT_END_TIME` dùng format `HH:mm`. Biến cũ `REPORT_TIMES` không còn được dùng vì form đầu ngày và cuối ngày có bộ câu hỏi khác nhau. Timezone đã được hard-code là `Asia/Ho_Chi_Minh`.
 
-`REPORT_DURATION` tính theo phút nếu dùng số nguyên, ví dụ `60`. Bot cũng chấp nhận `60m` hoặc `1h`. Hết thời gian này, bot sẽ chặn cả việc mở form và submit form.
+Bot không giới hạn thời gian mở form hoặc submit form. Khi gửi prompt mới, bot sẽ xóa prompt cũ cùng loại report trong DM của user trước để tránh có nhiều nút đầu ngày hoặc nhiều nút cuối ngày cùng tồn tại.
 
 ## Nội Dung Form
 

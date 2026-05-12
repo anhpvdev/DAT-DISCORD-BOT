@@ -21,8 +21,7 @@ const PROMPT_CUSTOM_ID_PREFIX = 'daily_report_open';
 const MODAL_CUSTOM_ID_PREFIX = 'daily_report_submit';
 const DEFAULT_REPORT_START_TIME = '08:00';
 const DEFAULT_REPORT_END_TIME = '17:00';
-const DEFAULT_REPORT_DURATION_MINUTES = 60;
-const VIETNAM_UTC_OFFSET_MINUTES = 7 * 60;
+const PROMPT_CLEANUP_PAGE_SIZE = 100;
 
 const REPORT_DEFINITIONS = [
   {
@@ -113,7 +112,6 @@ const config = {
     'TARGET_ROLE_IDS'
   ),
   reportChannelId: readEnv('REPORT_CHANNEL_ID'),
-  reportDurationMinutes: readReportDurationMinutes(),
   reports: buildReportConfigs(),
 };
 
@@ -134,7 +132,6 @@ client.once(Events.ClientReady, () => {
   console.log(`Daily report timezone: ${VIETNAM_TIME_ZONE}`);
   console.log(`Configured guilds: ${config.guildIds.join(', ')}`);
   console.log(`Configured roles: ${config.roleIds.join(', ')}`);
-  console.log(`Report duration: ${config.reportDurationMinutes} minutes`);
   console.log(
     `Daily report schedule: ${config.reports
       .map((report) => `${report.displayName} ${report.time}`)
@@ -201,53 +198,6 @@ function parseIdList(value, envName) {
   }
 
   return [...new Set(ids)];
-}
-
-function readReportDurationMinutes() {
-  const value = readOptionalEnv('REPORT_DURATION', [
-    'REPORT_DURATION_MINUTES',
-    'DAILY_REPORT_DURATION',
-    'DAILY_REPORT_DURATION_MINUTES',
-  ]);
-
-  if (!value) {
-    return DEFAULT_REPORT_DURATION_MINUTES;
-  }
-
-  return parseReportDurationMinutes(value, 'REPORT_DURATION');
-}
-
-function parseReportDurationMinutes(value, envName) {
-  const normalized = value.trim().toLowerCase();
-  let durationMinutes;
-
-  if (/^\d+$/.test(normalized)) {
-    durationMinutes = Number(normalized);
-  } else {
-    const match = normalized.match(
-      /^(\d+(?:\.\d+)?)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours)$/
-    );
-
-    if (match) {
-      const amount = Number(match[1]);
-      const unit = match[2];
-      durationMinutes = unit.startsWith('h') ? amount * 60 : amount;
-    }
-  }
-
-  if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
-    throw new Error(
-      `Invalid ${envName} value: ${value}. Expected minutes, for example 60, 60m, or 1h`
-    );
-  }
-
-  const roundedDurationMinutes = Math.round(durationMinutes);
-
-  if (roundedDurationMinutes !== durationMinutes) {
-    throw new Error(`Invalid ${envName} value: ${value}. Duration must resolve to whole minutes`);
-  }
-
-  return roundedDurationMinutes;
 }
 
 function buildReportConfigs() {
@@ -350,48 +300,11 @@ function getVietnamTimeParts(date = new Date()) {
   };
 }
 
-function getReportWindow(reportDate, reportTime) {
-  const startAt = getVietnamDateTimeAsUtcDate(reportDate, reportTime);
-  const endAt = new Date(startAt.getTime() + config.reportDurationMinutes * 60_000);
-
-  return { startAt, endAt };
-}
-
-function getVietnamDateTimeAsUtcDate(reportDate, reportTime) {
-  const [year, month, day] = reportDate.split('-').map(Number);
-  const [hour, minute] = reportTime.split(':').map(Number);
-
-  return new Date(
-    Date.UTC(year, month - 1, day, hour, minute) - VIETNAM_UTC_OFFSET_MINUTES * 60_000
-  );
-}
-
-function isReportWindowOpen(reportDate, reportTime, date = new Date()) {
-  const { startAt, endAt } = getReportWindow(reportDate, reportTime);
-
-  return date >= startAt && date <= endAt;
-}
-
 function isVietnamBusinessDay(reportDate) {
   const [year, month, day] = reportDate.split('-').map(Number);
   const dayOfWeek = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
 
   return dayOfWeek >= 1 && dayOfWeek <= 5;
-}
-
-function buildExpiredReportMessage(report, reportDate, reportTime) {
-  const { endAt } = getReportWindow(reportDate, reportTime);
-
-  return [
-    `Đã hết hạn gửi ${report.displayName} ngày ${formatVietnamDate(reportDate)}.`,
-    `Hạn cuối: ${formatVietnamDateTime(endAt)} theo giờ Việt Nam.`,
-  ].join('\n');
-}
-
-function formatVietnamDateTime(date) {
-  const vietnamTime = getVietnamTimeParts(date);
-
-  return `${vietnamTime.time} ngày ${formatVietnamDate(vietnamTime.date)}`;
 }
 
 function pruneScheduleKeys(currentDate) {
@@ -442,11 +355,14 @@ async function sendDailyReportPromptsForGuild(report, guildId, reportDate, repor
   const components = [new ActionRowBuilder().addComponents(button)];
   const content = buildPromptContent(report, reportDate);
   let sentCount = 0;
+  let deletedPromptCount = 0;
   const failedMembers = [];
 
   for (const member of members.values()) {
     try {
-      await member.send({ content, components });
+      const dmChannel = await member.createDM();
+      deletedPromptCount += await deleteExistingPromptMessages(dmChannel, report.type);
+      await dmChannel.send({ content, components });
       sentCount += 1;
     } catch (error) {
       failedMembers.push(member);
@@ -461,6 +377,7 @@ async function sendDailyReportPromptsForGuild(report, guildId, reportDate, repor
     failedRoleFetches,
     memberCount: members.size,
     sentCount,
+    deletedPromptCount,
     failedMembers,
   };
 }
@@ -495,9 +412,81 @@ function buildPromptContent(report, reportDate) {
   ].join('\n');
 }
 
+async function deleteExistingPromptMessages(dmChannel, reportType) {
+  let deletedCount = 0;
+  let before;
+
+  while (true) {
+    let messages;
+
+    try {
+      const fetchOptions = { limit: PROMPT_CLEANUP_PAGE_SIZE };
+
+      if (before) {
+        fetchOptions.before = before;
+      }
+
+      messages = await dmChannel.messages.fetch(fetchOptions);
+    } catch (error) {
+      console.warn(
+        `Cannot fetch old ${reportType} prompts in DM ${dmChannel.id}: ${error.message}`
+      );
+      return deletedCount;
+    }
+
+    if (!messages.size) {
+      return deletedCount;
+    }
+
+    before = messages.last().id;
+
+    for (const message of messages.values()) {
+      const promptReportType = getPromptMessageReportType(message);
+      const isOldPrompt = message.author.id === client.user.id && promptReportType === reportType;
+
+      if (!isOldPrompt) {
+        continue;
+      }
+
+      try {
+        await message.delete();
+        deletedCount += 1;
+      } catch (error) {
+        console.warn(`Cannot delete old ${reportType} prompt ${message.id}: ${error.message}`);
+      }
+    }
+
+    if (messages.size < PROMPT_CLEANUP_PAGE_SIZE) {
+      return deletedCount;
+    }
+  }
+}
+
+function getPromptMessageReportType(message) {
+  for (const row of message.components || []) {
+    for (const component of row.components || []) {
+      if (typeof component.customId !== 'string') {
+        continue;
+      }
+
+      const payload = parseCustomId(component.customId, PROMPT_CUSTOM_ID_PREFIX);
+
+      if (payload) {
+        return payload.report.type;
+      }
+    }
+  }
+
+  return null;
+}
+
 async function sendPromptSummary(report, reportDate, reportTime, results) {
   const channel = await getReportChannel();
   const sentCount = results.reduce((total, result) => total + (result.sentCount || 0), 0);
+  const deletedPromptCount = results.reduce(
+    (total, result) => total + (result.deletedPromptCount || 0),
+    0
+  );
   const memberCount = results.reduce((total, result) => total + (result.memberCount || 0), 0);
   const failedMemberCount = results.reduce(
     (total, result) => total + (result.failedMembers ? result.failedMembers.length : 0),
@@ -506,13 +495,10 @@ async function sendPromptSummary(report, reportDate, reportTime, results) {
   const failedCount = failedMemberCount + results.filter((result) => result.error).length;
   const fields = [
     { name: 'Ngày', value: formatVietnamDate(reportDate), inline: true },
-    {
-      name: 'Hạn report',
-      value: getVietnamTimeParts(getReportWindow(reportDate, reportTime).endAt).time,
-      inline: true,
-    },
+    { name: 'Giờ gửi', value: reportTime, inline: true },
     { name: 'Tổng member', value: String(memberCount), inline: true },
     { name: 'Đã gửi', value: String(sentCount), inline: true },
+    { name: 'Đã xóa prompt cũ', value: String(deletedPromptCount), inline: true },
     { name: 'Lỗi', value: String(failedCount), inline: true },
     { name: 'Danh sách thất bại', value: truncate(formatFailedMembers(results), 1024) },
   ];
@@ -559,14 +545,6 @@ async function handlePromptButton(interaction) {
 
   const { report, guildId, reportDate, reportTime } = payload;
 
-  if (!isReportWindowOpen(reportDate, reportTime)) {
-    await interaction.reply({
-      content: buildExpiredReportMessage(report, reportDate, reportTime),
-      flags: interaction.inGuild() ? MessageFlags.Ephemeral : undefined,
-    });
-    return;
-  }
-
   const modal = new ModalBuilder()
     .setCustomId(buildModalCustomId(report.type, guildId, reportDate, reportTime))
     .setTitle(`${report.modalTitle} ${formatVietnamDate(reportDate)}`);
@@ -599,14 +577,6 @@ async function handleReportSubmit(interaction) {
   }
 
   const { report, guildId, reportDate, reportTime } = payload;
-
-  if (!isReportWindowOpen(reportDate, reportTime)) {
-    await interaction.reply({
-      content: buildExpiredReportMessage(report, reportDate, reportTime),
-      flags: interaction.inGuild() ? MessageFlags.Ephemeral : undefined,
-    });
-    return;
-  }
 
   const channel = await getReportChannel();
   const submitterName = await getGuildMemberDisplayName(guildId, interaction.user);
