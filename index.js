@@ -14,6 +14,7 @@ const {
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
+const { handleMeetingInteraction, startMeetingNotifier } = require('./meetingNotifier');
 
 const VIETNAM_TIME_ZONE = 'Asia/Ho_Chi_Minh';
 const SCHEDULER_INTERVAL_MS = 20_000;
@@ -23,6 +24,9 @@ const DEFAULT_REPORT_START_TIME = '08:00';
 const DEFAULT_REPORT_END_TIME = '17:00';
 const PROMPT_CLEANUP_PAGE_SIZE = 100;
 const RESEND_COMMAND_PREFIX = '/resend';
+const DEFAULT_MEETING_KEYWORDS = 'sprint planning,meeting';
+const DEFAULT_MEETING_REMIND_BEFORE_MINUTES = 240;
+const DEFAULT_MEETING_POLL_INTERVAL_MINUTES = 5;
 
 const REPORT_DEFINITIONS = [
   {
@@ -114,7 +118,12 @@ const config = {
   ),
   reportChannelId: readEnv('REPORT_CHANNEL_ID'),
   reports: buildReportConfigs(),
+  meeting: buildMeetingConfig(),
 };
+
+if (config.meeting && !config.meeting.roleIds.length) {
+  config.meeting.roleIds = config.roleIds;
+}
 
 const client = new Client({
   intents: [
@@ -141,10 +150,23 @@ client.once(Events.ClientReady, () => {
       .join(', ')}`
   );
   startScheduler();
+
+  if (config.meeting) {
+    console.log(
+      `Meeting notifier: channel ${config.meeting.channelId}, remind ${config.meeting.remindBeforeMinutes} minutes before, poll every ${config.meeting.pollIntervalMinutes} minutes`
+    );
+    startMeetingNotifier(client, config.meeting);
+  } else {
+    console.log('Meeting notifier disabled: GCAL_ICS_URL or MEETING_CHANNEL_ID is not set');
+  }
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
+    if (await handleMeetingInteraction(interaction)) {
+      return;
+    }
+
     if (interaction.isButton() && interaction.customId.startsWith(PROMPT_CUSTOM_ID_PREFIX)) {
       await handlePromptButton(interaction);
       return;
@@ -158,7 +180,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
       await interaction.reply({
-        content: 'Không thể xử lý report lúc này. Vui lòng thử lại sau.',
+        content: 'Không thể xử lý yêu cầu lúc này. Vui lòng thử lại sau.',
         flags: interaction.inGuild() ? MessageFlags.Ephemeral : undefined,
       });
     }
@@ -220,6 +242,66 @@ function buildReportConfigs() {
     ...report,
     time: readReportTime(report.envName, report.aliases, report.defaultTime),
   }));
+}
+
+function buildMeetingConfig() {
+  const icsUrl = readOptionalEnv('GCAL_ICS_URL');
+  const channelId = readOptionalEnv('MEETING_CHANNEL_ID');
+
+  if (!icsUrl || !channelId) {
+    return null;
+  }
+
+  if (!/\.ics(?:\?|$)/i.test(icsUrl)) {
+    console.warn(
+      'GCAL_ICS_URL does not look like an iCal link. Use "Secret address in iCal format" (ends with basic.ics), not the public/embed URL.'
+    );
+  }
+
+  const mentionRoleIds = readOptionalEnv('MEETING_MENTION_ROLE_IDS');
+
+  return {
+    icsUrl,
+    channelId: parseIdList(channelId, 'MEETING_CHANNEL_ID')[0],
+    keywords: (readOptionalEnv('MEETING_KEYWORDS') || DEFAULT_MEETING_KEYWORDS)
+      .split(',')
+      .map((keyword) => keyword.trim())
+      .filter(Boolean),
+    organizerEmail: (readOptionalEnv('MEETING_ORGANIZER_EMAIL') || '').toLowerCase() || null,
+    roomCategoryId: readRoomCategoryId(),
+    remindBeforeMinutes: readPositiveIntEnv(
+      'MEETING_REMIND_BEFORE_MINUTES',
+      DEFAULT_MEETING_REMIND_BEFORE_MINUTES
+    ),
+    pollIntervalMinutes: readPositiveIntEnv(
+      'MEETING_POLL_INTERVAL_MINUTES',
+      DEFAULT_MEETING_POLL_INTERVAL_MINUTES
+    ),
+    // Bỏ trống thì dùng chung role với daily report (gán sau khi config được tạo).
+    roleIds: mentionRoleIds ? parseIdList(mentionRoleIds, 'MEETING_MENTION_ROLE_IDS') : [],
+    timeZone: VIETNAM_TIME_ZONE,
+  };
+}
+
+function readRoomCategoryId() {
+  // METTING_CHANNEL: giữ lại tên biến đang dùng trong .env hiện tại.
+  const value = readOptionalEnv('MEETING_ROOM_CATEGORY_ID', ['METTING_CHANNEL', 'MEETING_CHANNEL']);
+
+  return value ? parseIdList(value, 'MEETING_ROOM_CATEGORY_ID')[0] : null;
+}
+
+function readPositiveIntEnv(envName, defaultValue) {
+  const value = readOptionalEnv(envName);
+
+  if (!value) {
+    return defaultValue;
+  }
+
+  if (!/^\d+$/.test(value) || Number(value) < 1) {
+    throw new Error(`Invalid ${envName} value: ${value}. Expected a positive integer`);
+  }
+
+  return Number(value);
 }
 
 function readReportTime(envName, aliases, defaultTime) {
