@@ -105,8 +105,8 @@ function start(client, dailyReportConfig) {
   }));
 
   console.log(`Daily report timezone: ${settings.timeZone}`);
-  console.log(`Daily report guilds: ${settings.guildIds.join(', ')}`);
-  console.log(`Daily report roles: ${settings.roleIds.join(', ')}`);
+  console.log(`Configured guilds: ${settings.guildIds.join(', ')}`);
+  console.log(`Configured roles: ${settings.roleIds.join(', ')}`);
   console.log(
     `Daily report schedule: ${reports
       .map((report) => `${report.displayName} ${report.time}`)
@@ -277,9 +277,14 @@ async function sendDailyReportPromptsForGuild(report, guildId, reportDate, repor
   let deletedPromptCount = 0;
   const failedMembers = [];
 
+  const { reportType, ...message } = promptMessage;
+
   for (const member of members.values()) {
     try {
-      deletedPromptCount += await sendPromptToMember(member, promptMessage);
+      const dmChannel = await member.createDM();
+      // Cộng ngay số phiếu cũ đã xóa, kể cả khi gửi phiếu mới thất bại.
+      deletedPromptCount += await deleteExistingPromptMessages(dmChannel, reportType);
+      await dmChannel.send(message);
       sentCount += 1;
     } catch (error) {
       failedMembers.push(member);
@@ -315,14 +320,13 @@ function buildPromptMessage(report, guildId, reportDate, reportTime) {
   };
 }
 
-// Xóa phiếu cũ cùng loại trong DM rồi gửi phiếu mới. Trả về số phiếu cũ đã xóa.
+// Xóa phiếu cũ cùng loại trong DM rồi gửi phiếu mới (dùng cho lệnh /resend).
 async function sendPromptToMember(member, promptMessage) {
   const { reportType, ...message } = promptMessage;
   const dmChannel = await member.createDM();
-  const deletedCount = await deleteExistingPromptMessages(dmChannel, reportType);
 
+  await deleteExistingPromptMessages(dmChannel, reportType);
   await dmChannel.send(message);
-  return deletedCount;
 }
 
 async function fetchTargetRoles(guild) {

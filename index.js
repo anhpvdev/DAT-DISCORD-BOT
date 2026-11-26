@@ -31,37 +31,44 @@ client.once(Events.ClientReady, () => {
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
-  try {
-    // Mỗi module tự nhận diện interaction của mình qua customId và trả về true nếu đã xử lý.
-    if (await sprintNotifier.handleInteraction(interaction)) {
-      return;
-    }
-
-    await dailyReport.handleInteraction(interaction);
-  } catch (error) {
-    console.error('Failed to handle interaction:', error);
-
-    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-      await interaction
-        .reply({
-          content: 'Không thể xử lý yêu cầu lúc này. Vui lòng thử lại sau.',
-          flags: interaction.inGuild() ? MessageFlags.Ephemeral : undefined,
-        })
-        .catch(() => {});
-    }
+  // Mỗi module tự nhận diện interaction của mình qua customId và trả về true nếu đã xử lý.
+  if (await handleSafely(interaction, sprintNotifier, 'yêu cầu')) {
+    return;
   }
+
+  await handleSafely(interaction, dailyReport, 'report');
 });
 
 client.on(Events.MessageCreate, async (message) => {
   try {
     await dailyReport.handleMessage(message);
   } catch (error) {
-    console.error('Failed to handle message:', error);
+    console.error('Failed to handle resend command:', error);
 
     if (!message.author.bot && message.inGuild()) {
-      await message.reply('Không thể xử lý yêu cầu lúc này. Vui lòng thử lại sau.').catch(() => {});
+      await message.reply('Không thể xử lý report lúc này. Vui lòng thử lại sau.').catch(() => {});
     }
   }
 });
+
+// Lỗi trong module nào thì báo lỗi theo module đó (`subject`: "report" / "yêu cầu").
+async function handleSafely(interaction, module, subject) {
+  try {
+    return await module.handleInteraction(interaction);
+  } catch (error) {
+    console.error('Failed to handle interaction:', error);
+
+    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+      await interaction
+        .reply({
+          content: `Không thể xử lý ${subject} lúc này. Vui lòng thử lại sau.`,
+          flags: interaction.inGuild() ? MessageFlags.Ephemeral : undefined,
+        })
+        .catch(() => {});
+    }
+
+    return true;
+  }
+}
 
 client.login(config.token);
