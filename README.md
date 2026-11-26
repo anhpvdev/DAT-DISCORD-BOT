@@ -144,19 +144,22 @@ npm.cmd start
 
 `npm run check` kiểm tra cú pháp toàn bộ file.
 
-## Deploy With PM2
+## Deploy
 
-Trên server Linux:
+Trên server Linux đã cài Docker và Docker Compose v2 (lệnh `docker compose`):
 
 ```bash
-chmod +x deploy.sh
+git pull
 ./deploy.sh
 ```
 
-Mặc định PM2 process name là `dailybot`. Có thể đổi bằng:
+Script sẽ:
 
-```bash
-PM2_APP_NAME=dailybot-prod ./deploy.sh
-```
+1. Build image mới.
+2. Kiểm tra `.env` bằng image mới. Nếu `.env` sai (thiếu biến, còn tên biến cũ...), script dừng và bot đang chạy không bị ảnh hưởng.
+3. Thay container bằng bản mới, xóa các image không còn dùng (dangling) trên máy.
+4. Hiện trạng thái container và theo dõi log (Ctrl+C để thoát, bot vẫn chạy). Khi không chạy trong terminal (CI, ssh không tương tác) hoặc đặt `FOLLOW_LOGS=0`, script chỉ in 20 dòng log cuối.
 
-Script sẽ chạy `npm ci --omit=dev`, start/restart bot bằng PM2, sau đó `pm2 save`.
+Trạng thái sprint notification nằm ở thư mục `data/` trên server (mount vào container), không bị mất khi deploy lại.
+
+Chỉ chạy một bot cho mỗi token: nếu đã chạy bằng Docker thì không chạy thêm `npm start` ở nơi khác, nếu không mọi thông báo sẽ bị gửi 2 lần.

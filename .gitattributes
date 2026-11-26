@@ -1,0 +1,2 @@
+# Script shell phải dùng LF, nếu không bash trên Linux báo lỗi "bash\r: No such file".
+*.sh text eol=lf
