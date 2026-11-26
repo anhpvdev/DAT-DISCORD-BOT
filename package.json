@@ -8,13 +8,14 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js"
+    "check": "node --check index.js && node --check src/config.js && node --check src/utils.js && node --check src/dailyReport.js && node --check src/sprintNotifier.js"
   },
   "engines": {
-    "node": ">=18.17.0"
+    "node": ">=22"
   },
   "dependencies": {
     "discord.js": "^14.18.0",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "node-ical": "^0.27.6"
   }
 }
